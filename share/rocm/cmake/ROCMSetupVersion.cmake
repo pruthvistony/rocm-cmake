@@ -2,7 +2,6 @@
 # Copyright (C) 2017 Advanced Micro Devices, Inc.
 ################################################################################
 
-
 macro(rocm_set_parent VAR)
     set(${VAR} ${ARGN} PARENT_SCOPE)
     set(${VAR} ${ARGN})
@@ -67,21 +66,8 @@ function(rocm_get_build_info OUTPUT DELIM)
     rocm_set_parent(${OUTPUT} ${_info})
 endfunction()
 
-function(rocm_get_version OUTPUT_VERSION)
-    set(options)
-    set(oneValueArgs VERSION DIRECTORY)
-    set(multiValueArgs)
-
-    cmake_parse_arguments(PARSE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    set(_version ${PARSE_VERSION})
-
+function(rocm_get_git_commit_tag OUTPUT_VERSION)
     set(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-    if(PARSE_DIRECTORY)
-        set(DIRECTORY ${PARSE_DIRECTORY})
-    endif()
-
-    rocm_get_build_info(BUILD_INFO -)
 
     if(GIT)
         set(GIT_COMMAND ${GIT} describe --long --match [0-9]*)
@@ -92,7 +78,7 @@ function(rocm_get_version OUTPUT_VERSION)
                         RESULT_VARIABLE RESULT
                         ERROR_QUIET)
         if(${RESULT} EQUAL 0)
-            set(_version ${GIT_TAG_VERSION}${BUILD_INFO})
+            set(_output ${GIT_TAG_VERSION})
         else()
             execute_process(COMMAND ${GIT_COMMAND} --always
                         WORKING_DIRECTORY ${DIRECTORY}
@@ -101,14 +87,13 @@ function(rocm_get_version OUTPUT_VERSION)
                         RESULT_VARIABLE RESULT
                         ERROR_QUIET)
             if(${RESULT} EQUAL 0)
-                set(_version ${_version}${BUILD_INFO}-${GIT_TAG_VERSION})
+                set(_output ${GIT_TAG_VERSION})
             endif()
         endif()
     else()
-        set(_version ${_version}${BUILD_INFO})
+        set(_output "")
     endif()
-    rocm_set_parent(${OUTPUT_VERSION} ${_version})
-
+    rocm_set_parent(${OUTPUT_VERSION} ${_output})
 endfunction()
 
 function(rocm_version_regex_parse REGEX OUTPUT_VARIABLE INPUT)
@@ -118,6 +103,22 @@ function(rocm_version_regex_parse REGEX OUTPUT_VARIABLE INPUT)
     else()
         rocm_set_parent(${OUTPUT_VARIABLE} ${OUTPUT})
     endif()
+endfunction()
+
+function(rocm_get_debian_version_info OUTPUT DEF_VALUE)
+    set(_patch ${DEF_VALUE})
+    if(DEFINED ENV{CPACK_DEBIAN_PACKAGE_RELEASE})
+        set(_patch $ENV{CPACK_DEBIAN_PACKAGE_RELEASE})
+    endif()
+    rocm_set_parent(${OUTPUT} ${_patch})
+endfunction()
+
+function(rocm_get_rpm_release_info OUTPUT DEF_VALUE)
+    set(_patch ${DEF_VALUE})
+    if(DEFINED ENV{CPACK_RPM_PACKAGE_RELEASE})
+        set(_patch $ENV{CPACK_RPM_PACKAGE_RELEASE})
+    endif()
+    rocm_set_parent(${OUTPUT} ${_patch})
 endfunction()
 
 function(rocm_setup_version)
@@ -132,13 +133,30 @@ function(rocm_setup_version)
         if(PARSE_VERSION MATCHES "^[0-9]+\\.[0-9]+$")
             set(PARSE_VERSION ${PARSE_VERSION}.0)
         endif()
-        if(PARSE_NO_GIT_TAG_VERSION)
-            set(PACKAGE_VERSION ${PARSE_VERSION})
-        else()
-            rocm_get_commit_count(COMMIT_COUNT PARENT ${PARSE_PARENT})
-            rocm_get_version(PACKAGE_VERSION VERSION ${PARSE_VERSION}.${COMMIT_COUNT})
+
+        rocm_get_patch_version(ROCM_VERSION_NUM)
+	if(ROCM_VERSION_NUM)
+            set(PARSE_VERSION ${PARSE_VERSION}.${ROCM_VERSION_NUM})
+	endif()
+
+	set(GIT_TAG)
+	if(NOT PARSE_NO_GIT_TAG_VERSION)
+	    rocm_get_git_commit_tag(GIT_TAG)
         endif()
-        rocm_set_parent(PROJECT_VERSION ${PACKAGE_VERSION})
+
+	rocm_get_debian_version_info(DEBIAN_VERSION ${GIT_TAG})
+	rocm_get_rpm_release_info(RPM_RELEASE ${GIT_TAG})
+
+        # '%{?dist}' breaks manual builds on debian systems due to empty Provides
+        execute_process(COMMAND rpm --eval %{?dist}
+                        RESULT_VARIABLE PROC_RESULT
+                        OUTPUT_VARIABLE EVAL_RESULT
+                        OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if (PROC_RESULT EQUAL "0" AND NOT EVAL_RESULT STREQUAL "")
+            string (APPEND RPM_RELEASE "%{?dist}")
+        endif()
+
+	rocm_set_parent(PROJECT_VERSION ${PARSE_VERSION})
         rocm_set_parent(${PROJECT_NAME}_VERSION ${PROJECT_VERSION})
         rocm_version_regex_parse("^([0-9]+).*" _version_MAJOR "${PROJECT_VERSION}")
         rocm_version_regex_parse("^[0-9]+\\.([0-9]+).*" _version_MINOR "${PROJECT_VERSION}")
@@ -148,11 +166,13 @@ function(rocm_setup_version)
             rocm_set_parent(${PROJECT_NAME}_VERSION_${level} ${_version_${level}})
             rocm_set_parent(PROJECT_VERSION_${level} ${_version_${level}})
         endforeach()
+	rocm_set_parent(CPACK_DEBIAN_PACKAGE_RELEASE ${DEBIAN_VERSION})
+	rocm_set_parent(CPACK_RPM_PACKAGE_RELEASE ${RPM_RELEASE})
     endif()
 
 endfunction()
 
-function(rocm_get_so_patch OUTPUT)
+function(rocm_get_patch_version OUTPUT)
     set(_patch "")
     if(DEFINED ENV{ROCM_LIBPATCH_VERSION})
         set(_patch $ENV{ROCM_LIBPATCH_VERSION})
@@ -166,7 +186,7 @@ function(rocm_set_soversion LIBRARY_TARGET SOVERSION)
         rocm_version_regex_parse("^[0-9]+\\.(.*)" LIB_VERSION_MINOR "${SOVERSION}")
 
         set (LIB_VERSION_STRING "${LIB_VERSION_MAJOR}.${LIB_VERSION_MINOR}")
-        rocm_get_so_patch(LIB_VERSION_PATCH)
+        rocm_get_patch_version(LIB_VERSION_PATCH)
         if( NOT ${LIB_VERSION_PATCH} EQUAL "")
             set (LIB_VERSION_STRING "${LIB_VERSION_STRING}.${LIB_VERSION_PATCH}")
         endif()
