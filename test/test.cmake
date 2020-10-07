@@ -38,13 +38,15 @@ macro(test_expect_file FILE)
 endmacro()
 
 macro(test_exec)
+    string(REPLACE ";" " " EXEC_COMMAND "${ARGN}")
+    message("${EXEC_COMMAND}")
     execute_process(${ARGN} RESULT_VARIABLE test_exec_RESULT)
     if(NOT test_exec_RESULT EQUAL 0)
         message(FATAL_ERROR "Process failed: ${ARGN}")
     endif()
 endmacro()
 
-function(install_dir DIR)
+function(configure_dir DIR)
     set(options)
     set(oneValueArgs)
     set(multiValueArgs CMAKE_ARGS TARGETS)
@@ -59,17 +61,31 @@ function(install_dir DIR)
     test_exec(COMMAND ${CMAKE_COMMAND} 
         -DCMAKE_PREFIX_PATH=${PREFIX} 
         -DCMAKE_INSTALL_PREFIX=${PREFIX}
+        -DROCM_ERROR_TOOLCHAIN_VAR=On
         ${PARSE_CMAKE_ARGS}
         ${DIR}
         WORKING_DIRECTORY ${BUILD_DIR}
     )
-    test_exec(COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR})
     foreach(TARGET ${PARSE_TARGETS})
-        test_exec(COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target ${TARGET})
+        if("${TARGET}" STREQUAL all)
+            test_exec(COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR})
+        else()
+            test_exec(COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target ${TARGET})
+        endif()
     endforeach()
-    test_exec(COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target install)
 
     file(REMOVE_RECURSE ${BUILD_DIR})
+endfunction()
+
+
+function(install_dir DIR)
+    set(options)
+    set(oneValueArgs)
+    set(multiValueArgs CMAKE_ARGS TARGETS)
+
+    cmake_parse_arguments(PARSE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    configure_dir(${DIR} TARGETS all ${PARSE_TARGETS} install CMAKE_ARGS ${PARSE_CMAKE_ARGS})
 endfunction()
 
 function(write_version_cmake DIR VERSION CONTENT)
@@ -78,7 +94,7 @@ endfunction()
 
 function(test_check_package)
     set(options)
-    set(oneValueArgs NAME HEADER TARGET)
+    set(oneValueArgs NAME HEADER TARGET CHECK_TARGET)
     set(multiValueArgs)
 
     cmake_parse_arguments(PARSE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -92,8 +108,12 @@ function(test_check_package)
     if(PARSE_TARGET)
         set(TARGET ${PARSE_TARGET})
     endif()
+    set(CHECK_TARGET ${TARGET})
+    if(PARSE_CHECK_TARGET)
+        set(CHECK_TARGET ${PARSE_CHECK_TARGET})
+    endif()
 
-    install_dir(${TEST_DIR}/findpackagecheck CMAKE_ARGS -DPKG=${PARSE_NAME} -DPKG_TARGET=${TARGET} ${HEADER_FLAG})
+    install_dir(${TEST_DIR}/findpackagecheck CMAKE_ARGS -DPKG=${PARSE_NAME} -DPKG_TARGET=${TARGET} -DCHECK_TARGET=${CHECK_TARGET} ${HEADER_FLAG})
 endfunction()
 
 install_dir(${TEST_DIR}/../)
